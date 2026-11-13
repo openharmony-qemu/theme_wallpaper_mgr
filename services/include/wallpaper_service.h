@@ -20,6 +20,9 @@
 #include <list>
 #include <map>
 #include <mutex>
+#ifdef QEMU_WALLPAPER_RENDERER
+#include "qemu_wallpaper_renderer.h"
+#endif
 
 #include "accesstoken_kit.h"
 #include "component_name.h"
@@ -192,6 +195,12 @@ private:
     bool WriteWallpapercfgFile(char *wallpaperJson, int32_t userId);
 
 private:
+#ifdef QEMU_WALLPAPER_RENDERER
+    void RequestQemuRenderer(int32_t user = -1);
+    void StopQemuRenderer();
+    std::mutex qemuRendererMutex_;
+    std::shared_ptr<QemuWallpaperRenderer> qemuRenderer_;
+#endif
     int32_t Init();
     std::atomic<ServiceRunningState> state_;
     void InitServiceHandler();

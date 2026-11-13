@@ -86,6 +86,14 @@ ohos_shared_library("wallpaper_service") {
   branch_protector_ret = "pac_ret"
 
   defines = []
+  # Match the existing QEMU OpenVPN adapter's actual standard product names.
+  # Do not redirect stock products or a real ThemeService implementation.
+  if (!theme_service &&
+      (product_name == "armv7a_virt" || product_name == "arm64_virt" ||
+       product_name == "x86_64_virt")) {
+    defines += [ "QEMU_WALLPAPER_RENDERER" ]
+    sources += [ "src/qemu_wallpaper_renderer.cpp" ]
+  }
   if (theme_service) {
     defines += [ "THEME_SERVICE" ]
   } else {
@@ -163,6 +171,14 @@ ohos_static_library("wallpaper_service_static") {
   branch_protector_ret = "pac_ret"
 
   defines = []
+  # Match the existing QEMU OpenVPN adapter's actual standard product names.
+  # Do not redirect stock products or a real ThemeService implementation.
+  if (!theme_service &&
+      (product_name == "armv7a_virt" || product_name == "arm64_virt" ||
+       product_name == "x86_64_virt")) {
+    defines += [ "QEMU_WALLPAPER_RENDERER" ]
+    sources += [ "src/qemu_wallpaper_renderer.cpp" ]
+  }
   if (theme_service) {
     defines += [ "THEME_SERVICE" ]
   } else {

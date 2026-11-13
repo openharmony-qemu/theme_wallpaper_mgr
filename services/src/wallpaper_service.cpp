@@ -78,7 +78,12 @@ constexpr const char *LIVE_WALLPAPER_SYSTEM_ORIG = "live_wallpaper_system_orig";
 constexpr const char *LIVE_WALLPAPER_LOCK_ORIG = "live_wallpaper_lock_orig";
 constexpr const char *CUSTOM_WALLPAPER_LOCK = "custom_lock.zip";
 constexpr const char *CUSTOM_WALLPAPER_SYSTEM = "custom_system.zip";
+#ifdef QEMU_WALLPAPER_RENDERER
+// Only the three QEMU standard products build the separate real renderer HAP.
+constexpr const char *OHOS_WALLPAPER_BUNDLE_NAME = "com.ohos.wallpaper";
+#else
 constexpr const char *OHOS_WALLPAPER_BUNDLE_NAME = "com.ohos.launcher";
+#endif
 constexpr const char *SHOW_SYSTEM_SCREEN = "SHOW_SYSTEMSCREEN";
 constexpr const char *SHOW_LOCK_SCREEN = "SHOW_LOCKSCREEN";
 constexpr const char *SYSTEM_RES_TYPE = "SystemResType";
@@ -132,7 +137,9 @@ constexpr int32_t COMPRESSION_RATIO = 8;
 constexpr int32_t MIN_SIZE = 64;
 
 #ifndef THEME_SERVICE
+#ifndef QEMU_WALLPAPER_RENDERER
 constexpr int32_t CONNECT_EXTENSION_INTERVAL = 100;
+#endif
 constexpr int32_t DEFAULT_VALUE = -1;
 constexpr int32_t CONNECT_EXTENSION_MAX_RETRY_TIMES = 50;
 #endif
@@ -151,6 +158,9 @@ WallpaperService::WallpaperService() : WallpaperServiceStub(true), state_(Servic
 
 WallpaperService::~WallpaperService()
 {
+#ifdef QEMU_WALLPAPER_RENDERER
+    StopQemuRenderer();
+#endif
 }
 
 int32_t WallpaperService::Init()
@@ -230,16 +240,49 @@ void WallpaperService::InitServiceHandler()
 {
     HILOG_INFO("InitServiceHandler started.");
     if (serviceHandler_ != nullptr) {
+#ifdef QEMU_WALLPAPER_RENDERER
+        std::lock_guard<std::mutex> lock(qemuRendererMutex_);
+        if (qemuRenderer_ == nullptr) { qemuRenderer_ = QemuWallpaperRenderer::Create(serviceHandler_); }
+#endif
         HILOG_ERROR("InitServiceHandler already init.");
         return;
     }
     std::shared_ptr<AppExecFwk::EventRunner> runner =
         AppExecFwk::EventRunner::Create("WallpaperService", AppExecFwk::ThreadMode::FFRT);
     serviceHandler_ = std::make_shared<AppExecFwk::EventHandler>(runner);
+#ifdef QEMU_WALLPAPER_RENDERER
+    std::lock_guard<std::mutex> lock(qemuRendererMutex_);
+    qemuRenderer_ = QemuWallpaperRenderer::Create(serviceHandler_);
+#endif
 }
+
+#ifdef QEMU_WALLPAPER_RENDERER
+void WallpaperService::RequestQemuRenderer(int32_t user)
+{
+    std::shared_ptr<QemuWallpaperRenderer> renderer;
+    {
+        std::lock_guard<std::mutex> lock(qemuRendererMutex_);
+        renderer = qemuRenderer_;
+    }
+    if (renderer != nullptr) { renderer->Request(user); }
+}
+
+void WallpaperService::StopQemuRenderer()
+{
+    std::shared_ptr<QemuWallpaperRenderer> renderer;
+    {
+        std::lock_guard<std::mutex> lock(qemuRendererMutex_);
+        renderer.swap(qemuRenderer_);
+    }
+    if (renderer != nullptr) { renderer->Stop(); }
+}
+#endif
 
 void WallpaperService::OnStop()
 {
+#ifdef QEMU_WALLPAPER_RENDERER
+    StopQemuRenderer();
+#endif
     HILOG_INFO("OnStop started.");
     if (state_.load() != ServiceRunningState::STATE_RUNNING) {
         HILOG_ERROR("WallpaperService is not already running.");
@@ -338,6 +381,11 @@ void WallpaperService::InitQueryUserId(int32_t times)
 #ifndef THEME_SERVICE
 void WallpaperService::StartExtensionAbility(int32_t times)
 {
+#ifdef QEMU_WALLPAPER_RENDERER
+    // The independent controller treats only a real remote callback as success.
+    (void)times;
+    RequestQemuRenderer();
+#else
     times--;
     bool ret = ConnectExtensionAbility();
     if (!ret && times > 0 && serviceHandler_ != nullptr) {
@@ -345,6 +393,7 @@ void WallpaperService::StartExtensionAbility(int32_t times)
         auto callback = [this, times]() { StartExtensionAbility(times); };
         serviceHandler_->PostTask(callback, CONNECT_EXTENSION_INTERVAL);
     }
+#endif
 }
 #endif
 
@@ -505,7 +554,9 @@ void WallpaperService::OnSwitchedUser(int32_t userId)
     }
     currentUserId_ = userId;
     RemoveExtensionDeathRecipient();
-#ifndef THEME_SERVICE
+#ifdef QEMU_WALLPAPER_RENDERER
+    RequestQemuRenderer(userId);
+#elif !defined(THEME_SERVICE)
     ConnectExtensionAbility();
 #endif
     std::string userDir = WALLPAPER_USERID_PATH + std::to_string(userId);
@@ -907,6 +958,15 @@ bool WallpaperService::SendWallpaperChangeEvent(int32_t userId, WallpaperType wa
         HILOG_ERROR("GetWallpaperSafeLocked failed!");
         return false;
     }
+#ifdef QEMU_WALLPAPER_RENDERER
+    // Only a successful persisted desktop update asks the separate QEMU HAP
+    // to recover its connection. Rejected requests/cancellation/lock-only
+    // operations cannot start it. It reads the latest real wallpaper on create.
+    if (wallpaperType == WALLPAPER_SYSTEM &&
+        (wallpaperData.resourceType == PICTURE || wallpaperData.resourceType == DEFAULT)) {
+        RequestQemuRenderer(userId);
+    }
+#endif
     shared_ptr<WallpaperCommonEventManager> wallpaperCommonEventManager = make_shared<WallpaperCommonEventManager>();
     if (wallpaperType == WALLPAPER_SYSTEM) {
         HILOG_INFO("Send wallpaper system setting message.");
@@ -1291,7 +1351,7 @@ bool WallpaperService::ConnectExtensionAbility()
     }
     auto ret = AAFwk::AbilityManagerClient::GetInstance()->ConnectExtensionAbility(want, connection_, DEFAULT_VALUE);
     HILOG_INFO("ConnectExtensionAbility errCode=%{public}d", ret);
-    return ret;
+    return ret == ERR_OK;
 }
 #endif
 
